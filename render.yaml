@@ -2,9 +2,5 @@ services:
   - type: web
     name: aisconnect
     runtime: docker
-    plan: starter
+    plan: free
     healthCheckPath: /
-    disk:
-      name: aisconnect-data
-      mountPath: /data
-      sizeGB: 1

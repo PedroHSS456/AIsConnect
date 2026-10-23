@@ -11,7 +11,7 @@ Chamadas, microfone e câmera exigem HTTPS (ou localhost). Para Argon2id: `npm i
 
 ## Publicar na internet (necessário para usar só com o APK)
 1. Crie uma conta em render.com e abra: https://render.com/deploy?repo=https://github.com/PedroHSS456/AIsConnect
-2. Confirme. O Render usa o `render.yaml` (Docker + disco de 1 GB para o banco; o disco exige plano pago pequeno).
+2. Confirme. O Render usa o `render.yaml` (plano grátis, sem disco: os dados são apagados quando o servidor reinicia).
 3. Copie o endereço `https://….onrender.com`, coloque em `mobile/server-url.txt` e envie ao GitHub. O APK é recompilado com o endereço embutido.
 Sem disco persistente (planos gratuitos) os dados são apagados a cada reinício.
 
