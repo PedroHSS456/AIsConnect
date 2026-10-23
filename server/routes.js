@@ -329,12 +329,20 @@ module.exports = function (X) {
       .map(s => ({ ...C.aiPublic(db.get('SELECT * FROM ais WHERE id=?', s.ai_id)), share: { id: s.id, expires: s.expires, chatId: s.chat_id, maxMessages: s.max_messages, usedMessages: s.used_messages, maxTokens: s.max_tokens, usedTokens: s.used_tokens }, ownerName: C.getUser(s.owner_id)?.username }));
     return { mine: db.all('SELECT * FROM ais WHERE owner_id=? AND deleted=0 ORDER BY created', user.id).map(aiOwnerView), shared };
   });
-  R('POST', '/api/ais', ({ user, body }) => {
+  const pickModel = (prov, list) => {
+    const ok = list.filter(m => !/embed|tts|whisper|dall|image|moderation|audio|realtime|transcribe|guard|rerank/i.test(m));
+    const prefs = { openrouter: [/llama-3\.3-70b.*:free$/, /gemini.*:free$/, /deepseek.*:free$/, /:free$/], gemini: [/gemini-2\.\d-flash$/, /flash/], openai: [/^gpt-4o-mini$/, /^gpt-4\.1-mini$/, /^gpt-/], anthropic: [/sonnet/, /haiku/] };
+    for (const re of prefs[prov] || []) { const f = ok.find(m => re.test(m)); if (f) return f; }
+    return ok[0];
+  };
+  R('POST', '/api/ais', async ({ user, body }) => {
     const prov = P.PROVIDERS[body.provider]; need(prov, 400, 'Provedor não suportado.');
     need(db.get('SELECT COUNT(*) c FROM ais WHERE owner_id=? AND deleted=0', user.id).c < 20, 400, 'Limite de 20 IAs conectadas.');
-    const name = str(body.name, 30, 1); need(name && !/[@\n]/.test(name), 400, 'Dê um nome à IA (até 30 caracteres, sem @).');
-    const model = str(body.model, 120, 1) || prov.defaultModel; need(model, 400, 'Informe o modelo.');
+    const name = str(body.name, 30, 1) || prov.label.split(' ').pop(); need(name && !/[@\n]/.test(name), 400, 'Dê um nome à IA (até 30 caracteres, sem @).');
     const key = typeof body.apiKey === 'string' ? body.apiKey.trim() : ''; need(key || body.provider === 'custom', 400, 'Cole a chave de API do provedor.');
+    let model = str(body.model, 120, 1);
+    if (!model) { try { model = pickModel(body.provider, await P.listModels({ provider: body.provider, base_url: body.baseUrl }, key)); } catch (e) { if (e.code === 'auth') throw new HttpError(400, e.message); } model ||= prov.defaultModel; }
+    need(model, 400, 'Informe o modelo.');
     need(body.provider !== 'custom' || /^https?:\/\//.test(body.baseUrl || ''), 400, 'Informe a URL base (ex.: https://servidor/v1).');
     const id = S.rid('a_'); const t = body.temperature === '' || body.temperature == null ? null : Math.min(Math.max(+body.temperature, 0), 2);
     db.run('INSERT INTO ais(id,owner_id,name,provider,base_url,model,enc_key,key_hint,color,avatar,instructions,temperature,created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', id, user.id, name, body.provider, body.provider === 'custom' ? body.baseUrl.trim() : null, model, key ? S.encrypt(key) : null, key ? '••••' + key.slice(-4) : '', /^#[0-9a-f]{6}$/i.test(body.color || '') ? body.color : '#7c5cff', avatarOk(body.avatar), str(body.instructions, 4000) || '', Number.isNaN(t) ? null : t, Date.now());
@@ -401,4 +409,22 @@ module.exports = function (X) {
   // IAs conversam
   R('POST', '/api/chats/:id/auto', ({ user, params, body }) => { mem(params.id, user.id); const c = db.get('SELECT * FROM chats WHERE id=?', params.id); need(c.type !== 'ai', 400, 'Use um grupo com pelo menos duas IAs.'); const r = A.startAuto(c.id, user.id, body); need(r.ok, 400, r.reason); return { ok: true }; });
   R('DELETE', '/api/chats/:id/auto', ({ user, params }) => { mem(params.id, user.id); A.stopAuto(params.id); return { ok: true }; });
+
+  // Conexão com um toque via OpenRouter (OAuth PKCE): o usuário autoriza no site e a chave vem direto para o servidor.
+  const pending = new Map();
+  const baseOf = req => `${req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http')}://${req.headers.host}`;
+  R('POST', '/api/oauth/openrouter/start', ({ user, req }) => {
+    const verifier = S.token(48), challenge = require('crypto').createHash('sha256').update(verifier).digest('base64url');
+    pending.set(user.id, { verifier, exp: Date.now() + 600000 });
+    const cb = baseOf(req) + '/oauth/openrouter';
+    return { url: `https://openrouter.ai/auth?callback_url=${encodeURIComponent(cb)}&code_challenge=${challenge}&code_challenge_method=S256` };
+  });
+  R('POST', '/api/oauth/openrouter/finish', async ({ user, body }) => {
+    const p = pending.get(user.id); pending.delete(user.id); need(p && p.exp > Date.now() && typeof body.code === 'string', 400, 'A autorização expirou. Tente conectar de novo.');
+    let key; try { const r = await fetch('https://openrouter.ai/api/v1/auth/keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code: body.code, code_verifier: p.verifier, code_challenge_method: 'S256' }), signal: AbortSignal.timeout(15000) }); key = (await r.json()).key; } catch {}
+    need(key, 502, 'Não foi possível concluir a conexão com o OpenRouter. Tente de novo.');
+    let model; try { model = pickModel('openrouter', await P.listModels({ provider: 'openrouter' }, key)); } catch {} model ||= P.PROVIDERS.openrouter.defaultModel;
+    const id = S.rid('a_'); db.run('INSERT INTO ais(id,owner_id,name,provider,model,enc_key,key_hint,color,instructions,created) VALUES(?,?,?,?,?,?,?,?,?,?)', id, user.id, 'OpenRouter', 'openrouter', model, S.encrypt(key), '••••' + key.slice(-4), '#7c5cff', '', Date.now());
+    return { ai: aiOwnerView(db.get('SELECT * FROM ais WHERE id=?', id)) };
+  });
 };

@@ -85,6 +85,8 @@ async function startApp() {
     S.cfg = cfg; AIS.PROVIDERS = cfg.providers; for (const x of c.chats) S.chats.set(x.id, x); setContacts(k.contacts); S.ais = a; } catch (e) { return fail(e); }
   renderList(); connectWS();
   if (location.hash.startsWith('#add=')) { AIS.ui.addContact(decodeURIComponent(location.hash.slice(5))); history.replaceState(null, '', location.pathname); }
+  if (location.pathname === '/oauth/openrouter') { const code = new URLSearchParams(location.search).get('code'); history.replaceState(null, '', '/');
+    if (code) try { const r = await api('POST', '/api/oauth/openrouter/finish', { code }); await AIS.reloadAIs(); const c = await api('POST', '/api/chats/ai', { aiId: r.ai.id }); S.chats.set(c.chat.id, c.chat); renderList(); AIS.openChat(c.chat.id, true); toast('OpenRouter conectado! Pode conversar.', 'ok'); } catch (e) { fail(e); } else toast('A conexão foi cancelada.'); }
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 function setContacts(list) { S.contacts = list; S.contactMap = new Map(list.map(c => [c.id, c])); }

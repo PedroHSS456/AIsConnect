@@ -22,6 +22,12 @@ jobs:
           M=android/app/src/main/AndroidManifest.xml
           sed -i 's#<application#<uses-permission android:name="android.permission.CAMERA"/><uses-permission android:name="android.permission.RECORD_AUDIO"/><uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS"/><uses-permission android:name="android.permission.POST_NOTIFICATIONS"/><application#' $M
           npx cap sync android
+      - name: Embutir endereço do servidor
+        run: |
+          URL="${{ vars.SERVER_URL }}"
+          if [ -z "$URL" ] && [ -f mobile/server-url.txt ]; then URL=$(tr -d '[:space:]' < mobile/server-url.txt); fi
+          [ -n "$URL" ] && sed -i "s#__SERVER_URL__#$URL#" mobile/www/index.html || true
+          cd mobile && npx cap sync android
       - name: Compilar APK
         working-directory: mobile/android
         run: ./gradlew assembleDebug --no-daemon

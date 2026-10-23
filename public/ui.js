@@ -8,25 +8,44 @@ const open = c => { S.chats.set(c.id, c); AIS.renderList(); AIS.openChat(c.id, t
 const allAIs = () => [...S.ais.mine, ...S.ais.shared];
 U.refreshAIs = () => {}; U.refreshContacts = () => {};
 
-// ---------- Conectar IA ----------
+// ---------- Conectar IA (assistente passo a passo) ----------
+const GUIDE = {
+  gemini: { label: 'Google Gemini', sub: 'Chave gratuita no Google AI Studio', url: 'https://aistudio.google.com/apikey', site: 'Google AI Studio', how: 'Entre com sua conta Google, toque em "Create API key" e copie a chave.' },
+  openai: { label: 'ChatGPT (OpenAI)', sub: 'Chave paga por uso, na plataforma da OpenAI', url: 'https://platform.openai.com/api-keys', site: 'OpenAI', how: 'Entre, toque em "Create new secret key" e copie a chave. É preciso ter saldo na conta da API.' },
+  anthropic: { label: 'Claude (Anthropic)', sub: 'Chave paga por uso, no console da Anthropic', url: 'https://console.anthropic.com/settings/keys', site: 'Anthropic Console', how: 'Entre, toque em "Create Key" e copie a chave. É preciso ter saldo na conta da API.' },
+  openrouter: { label: 'OpenRouter', sub: '', url: 'https://openrouter.ai/keys', site: 'OpenRouter', how: '' },
+  custom: { label: 'Outro / servidor próprio', sub: 'Qualquer serviço compatível com a API da OpenAI (ex.: Ollama)' },
+};
+const detectKey = k => /^sk-or-/.test(k) ? 'openrouter' : /^sk-ant-/.test(k) ? 'anthropic' : /^AIza/.test(k) ? 'gemini' : /^sk-/.test(k) ? 'openai' : null;
 U.connectAI = () => {
-  let prov = 'openai'; const P = AIS.PROVIDERS;
-  const name = inp({ placeholder: 'ex.: Luna', maxlength: 30 }), key = inp({ type: 'password', autocomplete: 'off', placeholder: 'Cole a chave de API' }), base = inp({ placeholder: 'https://servidor/v1' }), model = inp(), ins = h('textarea', { class: 'inp', placeholder: 'Personalidade e instruções (opcional). Ex.: amigável, direta, responde em português.' });
-  const provBox = h('div', { class: 'prov' }), baseF = field('URL base (compatível com OpenAI)', base), hint = h('div', { class: 'small muted' }), er = h('div', { class: 'err' });
-  const paint = () => { provBox.replaceChildren(...Object.entries(P).map(([k, v]) => h('button', { type: 'button', class: prov === k ? 'on' : '', onclick: () => { prov = k; paint(); } }, v.label))); baseF.classList.toggle('hidden', !P[prov].needsBase); model.placeholder = P[prov].defaultModel || 'nome do modelo'; hint.textContent = P[prov].keyUrl ? `Crie sua chave em ${P[prov].keyUrl}. Uma assinatura comum do ChatGPT ou do Claude não inclui chave de API.` : 'Servidores locais (ex.: Ollama) podem ficar sem chave.'; };
-  paint();
-  const save = h('button', { class: 'btn primary' }, 'Conectar'), m = modal({ title: 'Conectar IA', body: h('div', {}, [h('div', { class: 'sec' }, [h('h3', {}, 'Provedor'), provBox]), field('Nome da IA', name), field('Chave de API', key, 'Fica criptografada no servidor. Ninguém, nem quem recebe seu compartilhamento, vê a chave.'), hint, baseF, field('Modelo', model, 'Deixe vazio para usar o padrão do provedor. Depois você pode trocar sem perder o histórico.'), field('Instruções', ins), er]), footer: save });
-  save.onclick = async () => {
-    er.textContent = ''; save.disabled = true; save.textContent = 'Conectando…';
-    try {
-      const { ai } = await api('POST', '/api/ais', { name: name.value, provider: prov, apiKey: key.value, baseUrl: base.value, model: model.value, instructions: ins.value }); await AIS.reloadAIs();
-      const t = await api('POST', `/api/ais/${ai.id}/test`);
-      const chatBtn = h('button', { class: 'btn primary', onclick: async () => { try { const r = await api('POST', '/api/chats/ai', { aiId: ai.id }); m.close(); open(r.chat); } catch (e) { fail(e); } } }, 'Conversar agora');
-      m.setBody(h('div', { style: 'text-align:center;padding:12px' }, [h('div', { html: av(ai, { cls: 'lg', ai: true }), style: 'display:flex;justify-content:center' }), h('h3', {}, `${ai.name} conectada`),
-        h('p', { class: t.ok ? '' : 'err' }, t.ok ? `Conexão testada com sucesso (${t.models} modelos disponíveis).${t.modelFound ? '' : ' O modelo escolhido não apareceu na lista; confira o nome.'}` : `Salvei a IA, mas o teste falhou: ${t.error} Você pode corrigir a chave em Configurações → Minhas IAs.`)]));
-      m.foot.replaceChildren(h('button', { class: 'btn', onclick: () => m.close() }, 'Fechar'), chatBtn);
-    } catch (e) { er.textContent = e.message; save.disabled = false; save.textContent = 'Conectar'; }
+  const m = modal({ title: 'Conectar uma IA', body: h('div'), footer: [] });
+  const done = async ai => {
+    await AIS.reloadAIs(); let t = { ok: true }; try { t = await api('POST', `/api/ais/${ai.id}/test`); } catch {}
+    m.el.querySelector('h2').textContent = 'Tudo certo!';
+    m.setBody(h('div', { style: 'text-align:center;padding:10px' }, [h('div', { style: 'display:flex;justify-content:center', html: av(ai, { cls: 'lg', ai: true }) }), h('h3', {}, `${ai.name} está conectada`), h('p', { class: 'muted' }, `Modelo: ${ai.model}. Você pode trocar o modelo ou a IA quando quiser, sem perder a conversa.`), t.ok ? null : h('p', { class: 'err' }, `Atenção: o teste falhou (${t.error}). Confira a chave em Configurações → Minhas IAs.`)]));
+    m.foot.replaceChildren(h('button', { class: 'btn', onclick: () => m.close() }, 'Fechar'), h('button', { class: 'btn primary', onclick: async () => { try { const r = await api('POST', '/api/chats/ai', { aiId: ai.id }); m.close(); open(r.chat); } catch (e) { fail(e); } } }, 'Conversar agora'));
   };
+  const home = () => {
+    m.el.querySelector('h2').textContent = 'Conectar uma IA'; m.foot.replaceChildren();
+    const card = (k, g) => h('button', { class: 'card row', style: 'width:100%;text-align:left;cursor:pointer', onclick: () => key(k), html: `<div class="grow"><b>${esc(g.label)}</b><div class="small muted">${esc(g.sub)}</div></div>${ic('back').replace('<svg', '<svg style="transform:rotate(180deg)"')}` });
+    const or = h('button', { class: 'btn primary', style: 'width:100%;padding:14px;flex-direction:column;gap:2px', onclick: async e => { e.currentTarget.disabled = true; try { const r = await api('POST', '/api/oauth/openrouter/start'); location.href = r.url; } catch (x) { fail(x); e.currentTarget.disabled = false; } } }, [h('span', {}, 'Conectar com OpenRouter'), h('small', { style: 'font-weight:500;opacity:.85' }, 'Mais fácil: toque, entre e autorize. Tem modelos grátis.')]);
+    m.setBody(h('div', {}, [h('p', { class: 'muted', style: 'margin-top:0' }, 'Escolha de onde vem a sua IA. Você só faz isso uma vez.'), or, h('div', { class: 'small muted', style: 'margin:16px 0 8px;text-align:center' }, 'ou use uma chave que você já tem'), ...['gemini', 'openai', 'anthropic', 'custom'].map(k => card(k, GUIDE[k])),
+      h('p', { class: 'small muted' }, 'Importante: assinaturas como ChatGPT Plus e Claude Pro não incluem chave de API. A chave vem de uma conta de desenvolvedor, separada, no site do provedor.')]));
+  };
+  const key = prov => {
+    const g = () => GUIDE[prov]; m.el.querySelector('h2').textContent = g().label;
+    const k = inp({ type: 'password', autocomplete: 'off', placeholder: 'Cole a chave aqui', style: 'flex:1' }), base = inp({ placeholder: 'https://servidor/v1' }), model = inp({ placeholder: 'nome do modelo' }), name = inp({ placeholder: 'Nome da IA (opcional)', maxlength: 30 }), ins = h('textarea', { class: 'inp', placeholder: 'Personalidade e instruções (opcional)' }), note = h('div', { class: 'small', style: 'color:var(--ok)' }), er = h('div', { class: 'err' });
+    k.oninput = () => { const d = detectKey(k.value.trim()); if (d && d !== prov && prov !== 'custom') { prov = d; m.el.querySelector('h2').textContent = g().label; note.textContent = `Reconheci uma chave do ${g().label}.`; } };
+    const paste = h('button', { type: 'button', class: 'btn', onclick: async () => { try { k.value = (await navigator.clipboard.readText()).trim(); k.oninput(); } catch { toast('Não consegui colar sozinho. Toque no campo e cole.'); k.focus(); } } }, 'Colar');
+    const steps = prov === 'custom' ? [field('URL do servidor', base), field('Chave (se o servidor exigir)', h('div', { class: 'row' }, [k])), field('Modelo', model)] : [
+      h('ol', { style: 'padding-left:20px;line-height:1.6' }, [h('li', {}, ['Toque para abrir o site do ', h('a', { href: g().url, target: '_blank', rel: 'noopener noreferrer', style: 'color:var(--accent);font-weight:700' }, g().site), '.']), h('li', {}, g().how), h('li', {}, 'Volte para o app e cole a chave abaixo.')]),
+      h('div', { class: 'row' }, [k, paste]), note];
+    const go = h('button', { class: 'btn primary' }, 'Conectar');
+    m.setBody(h('div', {}, [...steps, h('details', { style: 'margin-top:14px' }, [h('summary', { class: 'small muted', style: 'cursor:pointer' }, 'Opções avançadas'), h('div', { style: 'margin-top:10px' }, [field('Nome', name), ...(prov === 'custom' ? [] : [field('Modelo (deixe vazio para escolher automaticamente)', model)]), field('Instruções', ins)])]), er]));
+    m.foot.replaceChildren(h('button', { class: 'btn', onclick: home }, 'Voltar'), go);
+    go.onclick = async () => { er.textContent = ''; go.disabled = true; go.textContent = 'Conectando…'; try { const r = await api('POST', '/api/ais', { provider: prov, apiKey: k.value, baseUrl: base.value, model: model.value, name: name.value, instructions: ins.value }); await done(r.ai); } catch (e) { er.textContent = e.message; go.disabled = false; go.textContent = 'Conectar'; } };
+  };
+  home();
 };
 U.editAI = ai => {
   const name = inp({ value: ai.name }), key = inp({ type: 'password', placeholder: `Chave atual: ${ai.keyHint || 'nenhuma'} (deixe vazio para manter)` }), model = inp({ value: ai.model, list: 'mdl' }), dl = h('datalist', { id: 'mdl' }), ins = h('textarea', { class: 'inp' }); ins.value = ai.instructions || '';

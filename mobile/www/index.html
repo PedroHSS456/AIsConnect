@@ -7,6 +7,7 @@ button{width:100%;margin-top:12px;padding:12px;border:0;border-radius:10px;backg
 <input id="u" placeholder="http://192.168.0.10:3000" inputmode="url" autocapitalize="off" autocorrect="off"><button id="go">Conectar</button>
 <small>Use o endereço do computador onde o servidor está rodando (ou o domínio HTTPS dele). Chamadas de voz e vídeo exigem HTTPS.</small></div>
 <script>
+var BAKED='__SERVER_URL__';if(BAKED&&BAKED.indexOf('__SERVER'+'_URL__')<0&&!location.hash){location.replace(BAKED)}
 var k='ais_server',u=document.getElementById('u');try{u.value=localStorage.getItem(k)||''}catch(e){}
 function go(){var v=u.value.trim();if(!v)return;if(!/^https?:\/\//.test(v))v='http://'+v;try{localStorage.setItem(k,v)}catch(e){}location.href=v}
 document.getElementById('go').onclick=go;u.onkeydown=function(e){if(e.key==='Enter')go()};
