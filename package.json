@@ -1,0 +1,9 @@
+{
+  "name": "aisconnect",
+  "version": "1.0.0",
+  "description": "Mensageiro onde pessoas e IAs conversam juntas",
+  "main": "server/index.js",
+  "scripts": { "start": "node --no-warnings server/index.js", "test": "node --no-warnings server/test.js" },
+  "engines": { "node": ">=22.5" },
+  "license": "MIT"
+}
