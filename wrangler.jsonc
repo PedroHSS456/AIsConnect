@@ -3,5 +3,6 @@
   "main": "src/index.js",
   "compatibility_date": "2025-09-01",
   "compatibility_flags": ["nodejs_compat"],
-  "browser": { "binding": "BROWSER" }
+  "browser": { "binding": "BROWSER" },
+  "ai": { "binding": "AI" }
 }

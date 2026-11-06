@@ -1,11 +1,17 @@
 import puppeteer from "@cloudflare/puppeteer";
 
+const MODELO_IMAGEM = "@cf/black-forest-labs/flux-1-schnell";
+const MODELO_VISAO = "@cf/llava-hf/llava-1.5-7b-hf";
+const MAX_TRACOS = 450; // limite de traços para caber no tempo da rodada
+
 const FRASES = [
   "um gato astronauta comendo pizza",
   "um dinossauro dirigindo um carro",
   "uma batata fazendo yoga",
   "um robo tocando violao na praia",
   "um pato com oculos escuros",
+  "uma girafa tomando banho",
+  "um tubarao jogando futebol",
 ];
 const PALPITES = [
   "um bicho estranho",
@@ -48,15 +54,44 @@ async function boxCanvas(page) {
   });
 }
 
+// Lê na tela a frase que o bot precisa desenhar (maior texto visível fora de botões)
+async function lerFrase(page) {
+  const texto = await page.evaluate(() => {
+    const ruins = /^(pronto|enviar|ok|done|ready|send|desenhe|draw|limpar|desfazer)\W*$/i;
+    let melhor = null, tamanho = 0;
+    for (const el of document.querySelectorAll("body *")) {
+      if (el.children.length > 0) continue;
+      if (el.closest("button, script, style, a, canvas")) continue;
+      if (!el.offsetParent) continue;
+      const t = (el.innerText || "").trim();
+      if (t.length < 3 || t.length > 100 || ruins.test(t)) continue;
+      const fs = parseFloat(getComputedStyle(el).fontSize) || 0;
+      if (fs >= tamanho) { tamanho = fs; melhor = t; }
+    }
+    return melhor;
+  });
+  if (!texto) return null;
+  return texto.replace(/^(desenhe|draw)\s*[:\-]?\s*/i, "").trim() || null;
+}
+
+// Gera a imagem com IA a partir da frase (retorna data URL)
+async function gerarImagem(env, frase) {
+  const prompt =
+    `simple black and white line drawing of ${frase}, thick clean outlines, ` +
+    `minimal sketch, cartoon, no shading, no text, plain white background`;
+  const r = await env.AI.run(MODELO_IMAGEM, { prompt, steps: 4 });
+  return `data:image/jpeg;base64,${r.image}`;
+}
+
 // Converte a imagem em segmentos horizontais escuros, dentro do navegador
 async function calcularTracos(page, dataUrl, box) {
-  return page.evaluate(async (url, box) => {
-    const COLS = 90, LIM = 120, M = 0.04;
+  return page.evaluate(async (url, box, MAX) => {
+    const COLS = 70, LIM = 140, M = 0.04;
     const img = new Image();
     img.src = url;
     await img.decode();
     const aw = box.width * (1 - 2 * M), ah = box.height * (1 - 2 * M);
-    let rows = Math.max(1, Math.round(COLS * img.height / img.width));
+    const rows = Math.max(1, Math.round(COLS * img.height / img.width));
     let cel = aw / COLS;
     if (rows * cel > ah) cel = ah / rows;
     const cv = document.createElement("canvas");
@@ -68,21 +103,25 @@ async function calcularTracos(page, dataUrl, box) {
     const d = ctx.getImageData(0, 0, COLS, rows).data;
     const ox = box.x + (box.width - COLS * cel) / 2;
     const oy = box.y + (box.height - rows * cel) / 2;
-    const segs = [];
-    for (let y = 0; y < rows; y++) {
-      let ini = -1;
-      for (let x = 0; x <= COLS; x++) {
-        const i = (y * COLS + x) * 4;
-        const escuro = x < COLS && (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) < LIM;
-        if (escuro && ini < 0) ini = x;
-        if (!escuro && ini >= 0) {
-          segs.push([ox + (ini + 0.5) * cel, oy + (y + 0.5) * cel, ox + (x - 0.5) * cel]);
-          ini = -1;
+
+    for (let passo = 1; passo <= 4; passo++) {
+      const segs = [];
+      for (let y = 0; y < rows; y += passo) {
+        let ini = -1;
+        for (let x = 0; x <= COLS; x++) {
+          const i = (y * COLS + x) * 4;
+          const escuro = x < COLS && (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) < LIM;
+          if (escuro && ini < 0) ini = x;
+          if (!escuro && ini >= 0) {
+            segs.push([ox + (ini + 0.5) * cel, oy + (y + 0.5) * cel, ox + (x - 0.5) * cel]);
+            ini = -1;
+          }
         }
       }
+      if (segs.length <= MAX || passo === 4) return segs;
     }
-    return segs;
-  }, dataUrl, box);
+    return [];
+  }, dataUrl, box, MAX_TRACOS);
 }
 
 async function desenhar(page, dataUrl, box, log) {
@@ -96,31 +135,30 @@ async function desenhar(page, dataUrl, box, log) {
   }
 }
 
-async function imagemParaDataUrl(url) {
-  const r = await fetch(url);
-  const tipo = r.headers.get("content-type") || "image/png";
-  const bytes = new Uint8Array(await r.arrayBuffer());
-  let bin = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  }
-  return `data:${tipo};base64,${btoa(bin)}`;
+// Olha a tela, descreve o desenho com IA e usa como palpite
+async function palpiteDoDesenho(env, page) {
+  const png = await page.screenshot({ type: "jpeg", quality: 60 });
+  const r = await env.AI.run(MODELO_VISAO, {
+    image: Array.from(new Uint8Array(png)),
+    prompt: "Em portugues, em no maximo 5 palavras, o que esta desenhado? Responda so com a resposta.",
+    max_tokens: 24,
+  });
+  const t = (r.description || r.response || "").replace(/["\n]/g, " ").trim();
+  return t.length >= 3 ? t.slice(0, 60) : null;
 }
 
 export default {
   async fetch(request, env) {
     const u = new URL(request.url);
     const link = u.searchParams.get("link");
-    const img = u.searchParams.get("img");
     const nick = u.searchParams.get("nick") || "Bot";
     const minutos = Math.min(Number(u.searchParams.get("min") || 5), 9);
-    if (!link || !img) {
-      return new Response("Use: /?link=LINK_DA_SALA&img=URL_DA_IMAGEM&nick=Bot&min=5");
+    if (!link) {
+      return new Response("Use: /?link=LINK_DA_SALA&nick=Bot&min=5");
     }
 
     const logs = [];
     const log = (m) => logs.push(m);
-    const dataUrl = await imagemParaDataUrl(img);
 
     const browser = await puppeteer.launch(env.BROWSER, { keep_alive: 600000 });
     try {
@@ -144,7 +182,16 @@ export default {
           if (campo) {
             desenhou = false;
             if (!escreveu) {
-              const texto = pick(primeira ? FRASES : PALPITES);
+              let texto;
+              if (primeira) {
+                texto = pick(FRASES);
+              } else {
+                await sleep(1500); // deixa o desenho aparecer
+                texto = (await palpiteDoDesenho(env, page).catch((e) => {
+                  log("Visao falhou: " + e.message);
+                  return null;
+                })) || pick(PALPITES);
+              }
               await campo.click();
               await campo.type(texto);
               if (!(await clicarBotao(page, "^(pronto|enviar|ok|done|ready|send)"))) {
@@ -159,9 +206,12 @@ export default {
           escreveu = false;
           const box = await boxCanvas(page);
           if (box && !desenhou) {
+            desenhou = true; // marca antes para nao repetir se algo falhar
+            const frase = (await lerFrase(page)) || pick(FRASES);
+            log(`Frase para desenhar: ${frase}`);
+            const dataUrl = await gerarImagem(env, frase);
             await desenhar(page, dataUrl, box, log);
             await clicarBotao(page, "^(pronto|enviar|ok|done|ready|send)");
-            desenhou = true;
           } else if (!box) {
             desenhou = false;
           }
