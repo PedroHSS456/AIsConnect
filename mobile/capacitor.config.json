@@ -1,2 +1,0 @@
-{ "appId": "app.aisconnect", "appName": "AIsConnect", "webDir": "www",
-  "server": { "cleartext": true, "allowNavigation": ["*"] } }

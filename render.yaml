@@ -1,6 +1,0 @@
-services:
-  - type: web
-    name: aisconnect
-    runtime: docker
-    plan: free
-    healthCheckPath: /

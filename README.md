@@ -1,19 +1,34 @@
-# AIsConnect
-Mensageiro onde pessoas e IAs conversam juntas. Servidor Node 22 sem dependências externas.
+# gartic-bot
 
-## Rodar
-    node --no-warnings server/index.js        # http://localhost:3000
-    node --no-warnings server/test.js         # testes automatizados
+Bot para Gartic Phone rodando no Cloudflare Workers com Browser Rendering (Chromium na nuvem via Puppeteer).
 
-Dados ficam em `data/` (banco SQLite e chave mestra que criptografa as chaves de API). Faça backup e nunca publique essa pasta.
-Variáveis úteis: `PORT`, `AIS_DATA`, `AIS_MASTER_KEY`, `AIS_TURN_URL/USER/PASS` (chamadas atrás de NAT), `AIS_TRUST_PROXY=1` atrás de proxy.
-Chamadas, microfone e câmera exigem HTTPS (ou localhost). Para Argon2id: `npm i argon2` (sem ele usa scrypt).
+Ele abre o link da sala, entra com o nome escolhido, escreve a frase inicial, desenha a imagem que você passar (traço preto) e escreve palpites nas rodadas de adivinhar.
 
-## Publicar na internet (necessário para usar só com o APK)
-1. Crie uma conta em render.com e abra: https://render.com/deploy?repo=https://github.com/PedroHSS456/AIsConnect
-2. Confirme. O Render usa o `render.yaml` (plano grátis, sem disco: os dados são apagados quando o servidor reinicia).
-3. Copie o endereço `https://….onrender.com`, coloque em `mobile/server-url.txt` e envie ao GitHub. O APK é recompilado com o endereço embutido.
-Sem disco persistente (planos gratuitos) os dados são apagados a cada reinício.
+## Deploy
 
-## APK
-O workflow `.github/workflows/apk.yml` compila o APK (aba Actions) e publica em Releases. Ao abrir o app, informe o endereço do seu servidor.
+1. No painel da Cloudflare: **Workers & Pages → Create → Import a repository** e escolha este repositório.
+2. Deixe o comando de deploy padrão (`npx wrangler deploy`).
+3. O Browser Rendering precisa estar disponível na sua conta (há limite diário de tempo no plano grátis).
+
+## Uso
+
+Abra no navegador:
+
+```
+https://gartic-bot.SEU-USUARIO.workers.dev/?link=LINK_DA_SALA&img=https://site.com/imagem.png&nick=Bot&min=5
+```
+
+| Parâmetro | O que é |
+|-----------|---------|
+| `link` | Link da sala do Gartic Phone |
+| `img` | Link direto para a imagem (.png/.jpg) |
+| `nick` | Nome do bot na sala (padrão: Bot) |
+| `min` | Minutos que o bot fica na sala, máximo 9 (padrão: 5) |
+
+Deixe a aba aberta enquanto o bot roda. No fim, a página mostra o log do que ele fez.
+
+## Limitações
+
+- Os seletores (campo de nome, botão "Pronto", canvas) são detecções genéricas e podem precisar de ajuste.
+- Cada chamada dura no máximo uns 9 minutos. Para partidas longas, abra a URL de novo.
+- Use só em salas com amigos que sabem do bot.
