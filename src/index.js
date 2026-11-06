@@ -149,6 +149,18 @@ async function palpiteDoDesenho(env, page) {
 
 export default {
   async fetch(request, env) {
+    try {
+      return await rodar(request, env);
+    } catch (e) {
+      const msg = "ERRO: " + ((e && (e.stack || e.message)) || String(e));
+      return new Response(msg, { headers: { "content-type": "text/plain; charset=utf-8" } });
+    }
+  },
+};
+
+async function rodar(request, env) {
+    if (!env.BROWSER) throw new Error("Binding BROWSER nao encontrado (Browser Rendering nao ativo no worker).");
+    if (!env.AI) throw new Error("Binding AI nao encontrado (Workers AI nao ativo no worker).");
     const u = new URL(request.url);
     const link = u.searchParams.get("link");
     const nick = u.searchParams.get("nick") || "Bot";
@@ -224,5 +236,4 @@ export default {
       await browser.close();
     }
     return new Response(logs.join("\n"), { headers: { "content-type": "text/plain; charset=utf-8" } });
-  },
-};
+}
