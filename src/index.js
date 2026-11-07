@@ -149,14 +149,139 @@ async function palpiteDoDesenho(env, page) {
 
 export default {
   async fetch(request, env) {
+    const u = new URL(request.url);
     try {
-      return await rodar(request, env);
+      if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
+      if (u.pathname === "/api/img") return await apiImg(u, env);
+      if (u.pathname === "/api/pic") return await apiPic(u);
+      if (u.pathname === "/api/desc") return await apiDesc(request, env);
+      if (u.pathname === "/run") return await rodar(request, env);
+      return new Response("Nao encontrado", { status: 404 });
     } catch (e) {
       const msg = "ERRO: " + ((e && (e.stack || e.message)) || String(e));
-      return new Response(msg, { headers: { "content-type": "text/plain; charset=utf-8" } });
+      return new Response(msg, { status: 500, headers: { ...CORS, "content-type": "text/plain; charset=utf-8" } });
     }
   },
 };
+
+// ===================== API usada pelo bot dentro da pagina (public/bot.js) =====================
+
+const CORS = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-methods": "GET, POST, OPTIONS",
+  "access-control-allow-headers": "content-type",
+};
+const UA = { "user-agent": "gartic-bot/1.0 (https://github.com/PedroHSS456/AIsConnect)" };
+const PARADAS = new Set(["the", "and", "with", "for", "his", "her", "its", "are", "was", "into", "from", "that", "this"]);
+
+const json = (obj, status = 200) =>
+  new Response(JSON.stringify(obj), {
+    status,
+    headers: { ...CORS, "content-type": "application/json; charset=utf-8" },
+  });
+
+async function traduzir(env, texto, de, para) {
+  try {
+    const r = await env.AI.run("@cf/meta/m2m100-1.2b", { text: texto, source_lang: de, target_lang: para });
+    return (r.translated_text || "").trim() || texto;
+  } catch {
+    return texto; // sem IA, segue com o texto original
+  }
+}
+
+async function buscarCommons(q) {
+  const url =
+    "https://commons.wikimedia.org/w/api.php?" +
+    new URLSearchParams({
+      action: "query",
+      format: "json",
+      generator: "search",
+      gsrnamespace: "6",
+      gsrlimit: "10",
+      gsrsearch: `${q} filetype:bitmap`,
+      prop: "imageinfo",
+      iiprop: "url|mime",
+      iiurlwidth: "500",
+    });
+  const r = await fetch(url, { headers: UA });
+  if (!r.ok) return [];
+  const d = await r.json();
+  const paginas = Object.values((d.query && d.query.pages) || {}).sort((a, b) => (a.index || 0) - (b.index || 0));
+  return paginas
+    .map((p) => p.imageinfo && p.imageinfo[0])
+    .filter((i) => i && /^image\/(jpeg|png)$/.test(i.mime) && i.thumburl)
+    .map((i) => i.thumburl);
+}
+
+// GET /api/img?q=frase  ->  { url, consulta }
+async function apiImg(u, env) {
+  const frase = (u.searchParams.get("q") || "").trim().slice(0, 120);
+  if (!frase) return json({ erro: "faltou q" }, 400);
+
+  const ingles = await traduzir(env, frase, "portuguese", "english");
+  const palavras = ingles
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, " ")
+    .split(/\s+/)
+    .filter((w) => w.length > 2 && !PARADAS.has(w))
+    .sort((a, b) => b.length - a.length);
+  const consultas = [`${ingles} drawing`, ingles, ...palavras.slice(0, 4).map((w) => `${w} drawing`)];
+
+  for (const c of consultas) {
+    const achados = await buscarCommons(c).catch(() => []);
+    if (achados.length) {
+      const url = achados[Math.floor(Math.random() * Math.min(3, achados.length))];
+      return json({ url, consulta: c });
+    }
+  }
+  return json({ erro: "nenhuma imagem encontrada", ingles }, 404);
+}
+
+// GET /api/pic?u=URL  ->  repassa a imagem com CORS liberado (so upload.wikimedia.org)
+async function apiPic(u) {
+  const alvo = new URL(u.searchParams.get("u") || "");
+  if (alvo.protocol !== "https:" || alvo.hostname !== "upload.wikimedia.org") {
+    return json({ erro: "host nao permitido" }, 400);
+  }
+  const r = await fetch(alvo.toString(), { headers: UA, cf: { cacheEverything: true, cacheTtl: 86400 } });
+  return new Response(r.body, {
+    status: r.status,
+    headers: {
+      ...CORS,
+      "content-type": r.headers.get("content-type") || "image/jpeg",
+      "cache-control": "public, max-age=86400",
+    },
+  });
+}
+
+// POST /api/desc  { image: dataURL }  ->  { texto }  (descricao curta em portugues)
+async function apiDesc(request, env) {
+  const { image } = await request.json();
+  const b64 = String(image || "").split(",")[1];
+  if (!b64) return json({ erro: "sem imagem" }, 400);
+  const bin = atob(b64);
+  const bytes = Array.from({ length: bin.length }, (_, i) => bin.charCodeAt(i));
+  const pedido = {
+    image: bytes,
+    prompt: "In at most 5 words, what is drawn in this picture? Answer only with the answer.",
+    max_tokens: 24,
+  };
+
+  let r;
+  try {
+    r = await env.AI.run(MODELO_VISAO, pedido);
+  } catch (e) {
+    if (!/agree/i.test(String((e && e.message) || e))) throw e;
+    await env.AI.run(MODELO_VISAO, { prompt: "agree" }); // aceite unico da licenca do modelo
+    r = await env.AI.run(MODELO_VISAO, pedido);
+  }
+  const ingles = String(r.description || r.response || "").replace(/["\n.]/g, " ").trim();
+  if (ingles.length < 2) return json({ erro: "modelo nao descreveu" }, 502);
+  const texto = (await traduzir(env, ingles, "english", "portuguese")).slice(0, 60);
+  return json({ texto, ingles });
+}
+
+// ===================== Modo antigo: Chromium na nuvem (/run?link=...) =====================
 
 async function rodar(request, env) {
     if (!env.BROWSER) throw new Error("Binding BROWSER nao encontrado (Browser Rendering nao ativo no worker).");
@@ -166,7 +291,7 @@ async function rodar(request, env) {
     const nick = u.searchParams.get("nick") || "Bot";
     const minutos = Math.min(Number(u.searchParams.get("min") || 5), 9);
     if (!link) {
-      return new Response("Use: /?link=LINK_DA_SALA&nick=Bot&min=5");
+      return new Response("Use: /run?link=LINK_DA_SALA&nick=Bot&min=5");
     }
 
     const logs = [];

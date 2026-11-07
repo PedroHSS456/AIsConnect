@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bot Gartic Phone</title>
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111827; --card:#f3f4f6; --acc:#3b82f6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#0f172a; --fg:#e5e7eb; --card:#1e293b; } }
+  body { margin:0; padding:16px; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui, sans-serif; max-width:640px; margin-inline:auto; }
+  h1 { font-size:1.4rem; }
+  ol { padding-left:1.2rem; }
+  li { margin-bottom:.8rem; }
+  textarea { width:100%; box-sizing:border-box; height:110px; background:var(--card); color:var(--fg); border:0; border-radius:8px; padding:8px; font:12px monospace; }
+  button { width:100%; padding:14px; margin:8px 0; border:0; border-radius:10px; background:var(--acc); color:#fff; font:600 16px system-ui; }
+  .dica { background:var(--card); border-radius:8px; padding:10px 12px; font-size:.9rem; }
+</style>
+</head>
+<body>
+<h1>Bot Gartic Phone</h1>
+<p>Você joga normalmente no seu navegador. O bot desenha por você (busca uma imagem na internet e traça no canvas) e descreve os desenhos para dar palpites.</p>
+
+<ol>
+  <li><b>Copie o código do bot:</b>
+    <button id="copiar">Copiar código</button>
+    <textarea id="codigo" readonly></textarea>
+  </li>
+  <li><b>Crie o favorito:</b> no Chrome, abra o menu (⋮) e toque na estrela para favoritar <u>esta página</u>. Depois edite o favorito: nome <code>Bot Gartic</code> e, no campo do endereço (URL), apague tudo e cole o código.</li>
+  <li><b>Entre na sala do Gartic Phone</b> normalmente. Com a sala aberta, toque na barra de endereço, digite <code>Bot Gartic</code> e toque na sugestão com a estrela. Um painel azul aparece no canto da tela.</li>
+  <li><b>Na sua vez de desenhar:</b> toque <b>Desenhar</b>. <b>Na vez de adivinhar:</b> toque <b>Palpitar</b>, confira o texto e toque em Pronto. Ou marque <b>Auto</b> e ele faz tudo sozinho.</li>
+</ol>
+
+<div class="dica">
+  Antes de desenhar, escolha a caneta <b>preta</b> e a <b>mais fina</b>.<br>
+  Se ele não achar o tema sozinho, digite o tema no campo <b>Tema</b> do painel.
+</div>
+
+<script>
+  var codigo = "javascript:(()=>{const s=document.createElement('script');s.src='" + location.origin + "/bot.js?'+Date.now();document.head.appendChild(s)})()";
+  var area = document.getElementById("codigo");
+  area.value = codigo;
+  document.getElementById("copiar").onclick = function () {
+    var b = this;
+    function ok() { b.textContent = "Copiado!"; setTimeout(function () { b.textContent = "Copiar código"; }, 2000); }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(codigo).then(ok, function () { area.select(); document.execCommand("copy"); ok(); });
+    } else { area.select(); document.execCommand("copy"); ok(); }
+  };
+</script>
+</body>
+</html>
