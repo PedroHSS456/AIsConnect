@@ -5,7 +5,8 @@
   "use strict";
   if (window.__garticBot) { window.__garticBot.mostrar(); return; }
 
-  const BASE = new URL(document.currentScript.src).origin;
+  const BASE = window.__GBOT_BASE || new URL(document.currentScript.src).origin;
+  const MODO_NUVEM = !!window.__GBOT_ESCREVER; // rodando num navegador de servidor, como um jogador
   const MAX_TRACOS = 900;
   const PRONTO = /^(pronto|enviar|ok|done|ready|send|continuar)\b/i;
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -56,8 +57,12 @@
     "position:fixed;right:8px;bottom:8px;z-index:2147483647;width:220px;background:rgba(17,24,39,.92);" +
     "color:#fff;font:13px/1.3 sans-serif;padding:8px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,.4)";
   document.body.append(painel);
+  if (MODO_NUVEM) painel.style.pointerEvents = "none"; // o mouse real nunca pode bater no painel
 
-  const status = (t) => { msg.textContent = t; };
+  const status = (t) => {
+    msg.textContent = t;
+    if (typeof window.__logBot === "function") window.__logBot(String(t));
+  };
   fechar.onclick = () => {
     const aberto = corpo.style.display !== "none";
     corpo.style.display = aberto ? "none" : "block";
@@ -281,6 +286,11 @@
   // linhas: lista de polilinhas [[x,y], [x,y], ...] em coordenadas da tela
   // retorna { alvo, erros } para o painel mostrar o que aconteceu
   async function tracar(cv, linhas) {
+    // no servidor (Playwright) o mouse e de verdade: o navegador desenha, nao eventos simulados
+    if (typeof window.__tracoReal === "function") {
+      await window.__tracoReal(linhas);
+      return { alvo: "mouse real", erros: [] };
+    }
     painel.style.pointerEvents = "none"; // o painel nao pode tampar o canvas
     tratados = { pointer: 0, mouse: 0, touch: 0 };
     const erros = [];
@@ -547,21 +557,56 @@
 
   const hash = (s) => { let h = s.length; for (let i = 0; i < s.length; i += 97) h = (h * 31 + s.charCodeAt(i)) | 0; return h; };
 
+  const FRASES = [
+    "um gato astronauta comendo pizza", "um dinossauro dirigindo um carro", "uma batata fazendo yoga",
+    "um robo tocando violao na praia", "um pato com oculos escuros", "uma girafa tomando banho",
+    "um tubarao jogando futebol", "uma casa no meio da floresta", "um peixe voando no ceu",
+  ];
+  const PALPITES = ["um bicho estranho", "alguem fazendo algo engracado", "um monstro feliz", "uma coisa muito louca"];
+  const sorteia = (a) => a[Math.floor(Math.random() * a.length)];
+  let campoEscrito = null;
+
+  // escreve num campo e envia (usado so no modo jogador/nuvem)
+  async function escrever(c, texto) {
+    c.focus();
+    preencher(c, texto);
+    status(`Escreveu: ${texto}`);
+    await sleep(400);
+    if (!botao(PRONTO)) c.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, bubbles: true }));
+  }
+
   async function ciclo() {
     if (!auto || ocupado) return;
     const c = campo();
+    if (!c) campoEscrito = null;
+    const temDesenho = !!(maior("canvas", 200, 120) || maior("img", 200, 120));
     if (!c && maior("canvas", 200, 120)) {
       const frase = lerFrase();
       const ass = "d|" + frase;
       if (frase && ass !== ultima) { ultima = ass; await executar(() => desenhar(true)); }
-    } else if (c && (maior("canvas", 200, 120) || maior("img", 200, 120))) {
+    } else if (c && temDesenho) {
       let foto = null;
       try { foto = fotoDesenho(); } catch (e) { /* canvas bloqueado */ }
       const ass = "g|" + (foto ? hash(foto) : "");
-      if (foto && ass !== ultima) { ultima = ass; await executar(() => palpitar(true)); }
+      if (foto && ass !== ultima) {
+        ultima = ass;
+        await executar(async () => {
+          try { await palpitar(true); }
+          catch (e) {
+            if (!MODO_NUVEM) throw e;
+            await escrever(c, sorteia(PALPITES)); // sem IA, nao trava a rodada
+          }
+        });
+      }
+    } else if (c && MODO_NUVEM && c !== campoEscrito) {
+      campoEscrito = c; // fase de escrever a primeira frase
+      await executar(() => escrever(c, sorteia(FRASES)));
     }
   }
   setInterval(() => { ciclo().catch(() => {}); }, 1500);
 
-  window.__garticBot = { mostrar: () => { painel.style.display = "block"; corpo.style.display = "block"; fechar.textContent = "-"; } };
+  window.__garticBot = {
+    mostrar: () => { painel.style.display = "block"; corpo.style.display = "block"; fechar.textContent = "-"; },
+    ligarAuto: () => { chkAuto.checked = true; chkAuto.onchange(); },
+  };
 })();

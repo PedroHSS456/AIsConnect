@@ -41,3 +41,13 @@ O bot roda **dentro da página do Gartic** (por um favorito/bookmarklet), então
 - A busca de imagem é por texto e pode trazer algo que não combina com o tema.
 - Palpites vêm de um modelo pequeno de visão e erram bastante.
 - Use só em salas com amigos que sabem do bot.
+
+## Bot no Render (automático, entra na sala como jogador)
+
+O Gartic não aceita toque simulado dentro da página, então este modo roda um Chromium de verdade num servidor (Render) e usa o **mouse real** do Playwright. Ele entra na sala pelo link, escreve a primeira frase, desenha o tema e dá palpites, sozinho. Reaproveita o mesmo `public/bot.js` (baixado do Worker).
+
+1. No Render: **New → Blueprint** (ou Web Service), conecte este repositório. O `render.yaml` já configura tudo (Docker em `render/`, variável `WORKER_URL`).
+2. Abra `https://SEU-SERVICO.onrender.com/entrar?link=LINK_DA_SALA&nick=Bot&min=30`.
+3. A página mostra o log e atualiza sozinha. `/tela` mostra uma foto do que o bot está vendo e `/parar` encerra.
+
+Limites: o plano grátis do Render dorme sem acesso (deixe a página do log aberta) e tem pouca memória. A imagem e os palpites por IA usam o Worker da Cloudflare; se o limite diário dela acabar, ele usa rabiscos prontos e palpites genéricos.

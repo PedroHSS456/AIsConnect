@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: gartic-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./render/Dockerfile
+    dockerContext: ./render
+    envVars:
+      - key: WORKER_URL
+        value: https://aisconnect.soaresdesouzapedrohenrique22.workers.dev
