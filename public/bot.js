@@ -115,22 +115,24 @@
 
   // ---------------------------------------------------------------- desenhar
   async function buscarImagem(frase) {
-    const r = await fetch(`${BASE}/api/img?q=${encodeURIComponent(frase)}`);
+    const r = await buscar(`${BASE}/api/img?q=${encodeURIComponent(frase)}`, 15000);
     const d = await r.json();
     if (!d.url) throw new Error(d.erro || "nenhuma imagem achada");
-    return new Promise((ok, erro) => {
-      const im = new Image();
-      im.crossOrigin = "anonymous";
-      im.onload = () => ok(im);
-      im.onerror = () => erro(new Error("falha ao carregar a imagem"));
-      im.src = `${BASE}/api/pic?u=${encodeURIComponent(d.url)}`;
-    });
+    // baixa como bytes (fetch) em vez de <img>: evita o bloqueio de imagens de outros sites (CSP img-src)
+    const resp = await buscar(`${BASE}/api/pic?u=${encodeURIComponent(d.url)}`, 15000);
+    if (!resp.ok) throw new Error("download da imagem falhou (HTTP " + resp.status + ")");
+    const blob = await resp.blob();
+    try {
+      return await createImageBitmap(blob);
+    } catch (e) {
+      throw new Error("imagem invalida (" + (blob.type || "?") + ", " + blob.size + " bytes)");
+    }
   }
 
   // imagem -> lista de tracos [x0, y0, x1, y1] em coordenadas da tela (bordas por Sobel)
   function tracos(im, box) {
     const W = Math.max(50, Math.min(110, Math.round(box.width / 5)));
-    const H = Math.max(8, Math.round((W * im.naturalHeight) / im.naturalWidth));
+    const H = Math.max(8, Math.round((W * (im.naturalHeight || im.height)) / (im.naturalWidth || im.width)));
     const cv = document.createElement("canvas");
     cv.width = W; cv.height = H;
     const cx = cv.getContext("2d");
@@ -222,15 +224,109 @@
     }
   }
 
-  async function tracar(cv, segs) {
+  // alvo real do clique: o elemento no topo naquele ponto (como um toque de verdade)
+  const topoEm = (x, y, padrao) => {
+    const n = document.elementFromPoint(x, y);
+    return n && !dentro(n) ? n : padrao;
+  };
+
+  // linhas: lista de polilinhas [[x,y], [x,y], ...] em coordenadas da tela
+  async function tracar(cv, linhas) {
+    painel.style.pointerEvents = "none"; // o painel nao pode tampar o canvas
     let n = 0;
-    for (const [x0, y0, x1, y1] of segs) {
-      disparar(cv, "down", x0, y0);
-      const passos = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / 6));
-      for (let s = 1; s <= passos; s++) disparar(cv, "move", x0 + ((x1 - x0) * s) / passos, y0 + ((y1 - y0) * s) / passos);
-      disparar(cv, "up", x1, y1);
-      if (++n % 6 === 0) await sleep(0);
+    try {
+      for (const pts of linhas) {
+        if (!pts.length) continue;
+        let [px, py] = pts[0];
+        const alvo = topoEm(px, py, cv);
+        disparar(alvo, "down", px, py);
+        for (let i = 1; i < pts.length; i++) {
+          const [qx, qy] = pts[i];
+          const passos = Math.max(1, Math.ceil(Math.hypot(qx - px, qy - py) / 6));
+          for (let s = 1; s <= passos; s++) disparar(alvo, "move", px + ((qx - px) * s) / passos, py + ((qy - py) * s) / passos);
+          px = qx; py = qy;
+        }
+        if (pts.length === 1) disparar(alvo, "move", px, py);
+        disparar(alvo, "up", px, py);
+        if (++n % 6 === 0) await sleep(0);
+      }
+    } finally {
+      painel.style.pointerEvents = "";
     }
+  }
+
+  const paraLinhas = (segs) => segs.map(([a, b, c, d]) => [[a, b], [c, d]]);
+
+  // assinatura dos canvases da pagina: serve para saber se o desenho realmente apareceu
+  function assinatura() {
+    let h = 0;
+    for (const n of document.querySelectorAll("canvas")) {
+      if (dentro(n) || !visivel(n)) continue;
+      try {
+        const t = document.createElement("canvas");
+        t.width = 48; t.height = 32;
+        const x = t.getContext("2d");
+        x.drawImage(n, 0, 0, 48, 32);
+        const d = x.getImageData(0, 0, 48, 32).data;
+        for (let i = 0; i < d.length; i++) h = (h * 31 + d[i]) | 0;
+      } catch (e) { return null; }
+    }
+    return h;
+  }
+
+  // coordenadas 0..100 (quadrado) -> tela, centralizado no canvas
+  function noBox(linhas, box) {
+    const lado = Math.min(box.width, box.height) * 0.9;
+    const ox = box.left + (box.width - lado) / 2;
+    const oy = box.top + (box.height - lado) / 2;
+    return linhas.map((pts) => pts.map(([x, y]) => [ox + (x / 100) * lado, oy + (y / 100) * lado]));
+  }
+
+  async function buscar(url, ms, opcoes) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), ms);
+    try { return await fetch(url, { ...(opcoes || {}), signal: ctl.signal }); } finally { clearTimeout(t); }
+  }
+
+  // plano B: a IA escreve os tracos do desenho (JSON) a partir da frase
+  async function rabiscoIA(frase, box) {
+    const r = await buscar(`${BASE}/api/rabisco?q=${encodeURIComponent(frase)}`, 25000);
+    const d = await r.json();
+    if (!d.strokes || !d.strokes.length) throw new Error(d.erro || "IA sem tracos");
+    return noBox(d.strokes, box);
+  }
+
+  // plano C: rabiscos prontos no proprio script (nao dependem de rede)
+  const circ = (cx, cy, r, n = 24) => Array.from({ length: n + 1 }, (_, i) => [cx + r * Math.cos((2 * Math.PI * i) / n), cy + r * Math.sin((2 * Math.PI * i) / n)]);
+  const ret = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h], [x, y]];
+  const estrela = (cx, cy, R) => Array.from({ length: 6 }, (_, i) => { const a = -Math.PI / 2 + (i * 4 * Math.PI) / 5; return [cx + R * Math.cos(a), cy + R * Math.sin(a)]; });
+  const DESENHOS = [
+    [/casa|lar\b|predio|house/, () => [ret(25, 50, 50, 40), [[18, 50], [50, 18], [82, 50], [18, 50]], ret(44, 65, 12, 25), ret(30, 58, 10, 10)]],
+    [/\bsol\b|sun|dia/, () => [circ(50, 50, 16), ...Array.from({ length: 8 }, (_, i) => { const a = (i * Math.PI) / 4; return [[50 + 22 * Math.cos(a), 50 + 22 * Math.sin(a)], [50 + 36 * Math.cos(a), 50 + 36 * Math.sin(a)]]; })]],
+    [/arvore|planta|floresta|tree|mato/, () => [ret(44, 55, 12, 38), circ(50, 38, 24, 30)]],
+    [/gato|cat|felino|tigre|leao|gatinho/, () => [circ(50, 56, 26, 30), [[28, 42], [30, 18], [44, 32]], [[56, 32], [70, 18], [72, 42]], circ(41, 52, 3, 8), circ(59, 52, 3, 8), [[47, 60], [53, 60], [50, 64], [47, 60]], [[50, 64], [46, 70], [42, 68]], [[50, 64], [54, 70], [58, 68]], [[20, 60], [38, 62]], [[20, 68], [38, 65]], [[80, 60], [62, 62]], [[80, 68], [62, 65]]]],
+    [/cachorro|cao\b|dog|lobo|cachorrinho/, () => [circ(50, 56, 24, 30), [[30, 44], [18, 38], [16, 62], [28, 64]], [[70, 44], [82, 38], [84, 62], [72, 64]], circ(42, 52, 3, 8), circ(58, 52, 3, 8), circ(50, 62, 5, 10), [[50, 67], [50, 72], [44, 76]], [[50, 72], [56, 76]]]],
+    [/peixe|tubarao|baleia|fish|shark|mar\b|golfinho/, () => [circ(46, 50, 26, 30), [[70, 50], [90, 32], [90, 68], [70, 50]], circ(34, 44, 3, 8), [[24, 56], [30, 60], [38, 58]]]],
+    [/carro|car\b|onibus|caminhao|veiculo|moto/, () => [ret(15, 48, 70, 20), [[28, 48], [36, 32], [64, 32], [74, 48]], circ(32, 70, 8, 14), circ(68, 70, 8, 14)]],
+    [/flor|flower|rosa|jardim/, () => [circ(50, 36, 7, 12), ...Array.from({ length: 6 }, (_, i) => circ(50 + 16 * Math.cos((i * Math.PI) / 3), 36 + 16 * Math.sin((i * Math.PI) / 3), 9, 12)), [[50, 52], [50, 90]], [[50, 72], [66, 62], [60, 76], [50, 72]]]],
+    [/estrela|star|ceu|noite/, () => [estrela(50, 52, 36)]],
+    [/coracao|amor|heart|paixao/, () => [[[50, 85], [18, 52], [18, 34], [32, 22], [46, 28], [50, 36], [54, 28], [68, 22], [82, 34], [82, 52], [50, 85]]]],
+    [/foguete|astronauta|espaco|rocket|nave|lua\b/, () => [[[50, 8], [64, 34], [64, 72], [36, 72], [36, 34], [50, 8]], circ(50, 44, 7, 14), [[36, 60], [22, 82], [36, 72]], [[64, 60], [78, 82], [64, 72]], [[44, 72], [50, 92], [56, 72]]]],
+    [/pizza|comida|lanche|bolo|torta/, () => [circ(50, 50, 36, 36), [[50, 14], [50, 86]], [[14, 50], [86, 50]], [[24, 24], [76, 76]], [[76, 24], [24, 76]], circ(36, 38, 5, 10), circ(64, 38, 5, 10), circ(36, 62, 5, 10), circ(64, 62, 5, 10)]],
+    [/bola|futebol|bola/, () => [circ(50, 50, 36, 36), circ(50, 50, 10, 5), [[50, 40], [50, 14]], [[59, 47], [84, 38]], [[56, 59], [72, 80]], [[44, 59], [28, 80]], [[41, 47], [16, 38]]]],
+  ];
+  function rabiscoLocal(frase, box) {
+    const f = frase.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+    const achados = DESENHOS.filter(([rx]) => rx.test(f)).slice(0, 2).map(([, fn]) => fn());
+    let linhas;
+    if (achados.length >= 2) {
+      linhas = achados.flatMap((ls, i) => ls.map((pts) => pts.map(([x, y]) => [x * 0.5 + i * 50, y * 0.5 + 25])));
+    } else if (achados.length === 1) {
+      linhas = achados[0];
+    } else {
+      linhas = [circ(50, 50, 38, 36), circ(38, 40, 4, 8), circ(62, 40, 4, 8), [[30, 60], [40, 72], [60, 72], [70, 60]]]; // carinha
+    }
+    return noBox(linhas, box);
   }
 
   async function desenhar(enviar) {
@@ -238,12 +334,42 @@
     if (!cv) throw new Error("nao achei o canvas de desenho");
     const frase = lerFrase();
     if (!frase) throw new Error("nao achei o tema: digite no campo Tema");
+    let r0 = cv.getBoundingClientRect();
+    if (r0.top < 0 || r0.left < 0 || r0.bottom > innerHeight || r0.right > innerWidth) {
+      cv.scrollIntoView({ block: "center" });
+      await sleep(300);
+    }
+    const box = cv.getBoundingClientRect();
+
+    let linhas = null, fonte = "";
     status(`Buscando imagem: ${frase}`);
-    const im = await buscarImagem(frase);
-    status("Desenhando...");
-    const segs = tracos(im, cv.getBoundingClientRect());
-    await tracar(cv, segs);
-    status(`Desenhou (${segs.length} tracos): ${frase}`);
+    try {
+      const im = await buscarImagem(frase);
+      const segs = tracos(im, box);
+      if (segs.length < 25) throw new Error("imagem sem tracos");
+      linhas = paraLinhas(segs);
+      fonte = "imagem";
+    } catch (e1) {
+      status(`Sem imagem (${e1.message}). Pedindo o rabisco a IA...`);
+      try {
+        linhas = await rabiscoIA(frase, box);
+        fonte = "IA";
+      } catch (e2) {
+        linhas = rabiscoLocal(frase, box);
+        fonte = "rabisco pronto";
+      }
+    }
+
+    status(`Desenhando (${fonte})...`);
+    const antes = assinatura();
+    await tracar(cv, linhas);
+    await sleep(500);
+    const depois = assinatura();
+    if (antes !== null && antes === depois) {
+      status(`Tracei (${fonte}) mas o canvas nao mudou: o Gartic parece ignorar cliques simulados.`);
+      return;
+    }
+    status(`Desenhou (${fonte}): ${frase}`);
     if (enviar) { await sleep(400); botao(PRONTO); }
   }
 

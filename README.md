@@ -6,7 +6,7 @@ Ajudante para Gartic Phone. Você joga no seu próprio navegador e o bot faz o t
 
 O bot roda **dentro da página do Gartic** (por um favorito/bookmarklet), então não precisa de PC nem de navegador na nuvem.
 
-- **Desenhar:** lê o tema na tela, busca uma imagem na internet (Wikimedia Commons), converte em traços (bordas) e desenha no canvas.
+- **Desenhar:** lê o tema na tela e desenha no canvas. Tenta, em ordem: (1) imagem da internet convertida em traços, (2) traços escritos pela IA, (3) rabiscos prontos no próprio script. O painel diz qual usou e avisa se o Gartic ignorar os traços.
 - **Palpitar:** descreve o desenho na tela com IA (Workers AI) e preenche o campo de texto.
 - **Auto:** faz os dois sozinho a cada rodada.
 
@@ -29,6 +29,7 @@ O bot roda **dentro da página do Gartic** (por um favorito/bookmarklet), então
 | `/bot.js` | Script que roda dentro do Gartic |
 | `/api/img?q=frase` | Traduz a frase e busca uma imagem |
 | `/api/pic?u=URL` | Repassa a imagem com CORS (só `upload.wikimedia.org`) |
+| `/api/rabisco?q=frase` | A IA escreve os traços de um desenho simples (plano B quando a imagem falha) |
 | `/api/desc` | Descreve um desenho (POST com `{image: dataURL}`) |
 | `/run?link=SALA&nick=Bot&min=5` | Modo antigo: Chromium na nuvem entra na sala sozinho (usa Browser Rendering, limite diário baixo no plano grátis) |
 

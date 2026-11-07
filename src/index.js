@@ -154,6 +154,7 @@ export default {
       if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
       if (u.pathname === "/api/img") return await apiImg(u, env);
       if (u.pathname === "/api/pic") return await apiPic(u);
+      if (u.pathname === "/api/rabisco") return await apiRabisco(u, env);
       if (u.pathname === "/api/desc") return await apiDesc(request, env);
       if (u.pathname === "/run") return await rodar(request, env);
       return new Response("Nao encontrado", { status: 404 });
@@ -252,6 +253,36 @@ async function apiPic(u) {
       "cache-control": "public, max-age=86400",
     },
   });
+}
+
+// GET /api/rabisco?q=frase  ->  { strokes: [[[x,y],...],...] }  coordenadas 0..100, escritas pela IA
+async function apiRabisco(u, env) {
+  const frase = (u.searchParams.get("q") || "").trim().slice(0, 120);
+  if (!frase) return json({ erro: "faltou q" }, 400);
+  const ingles = await traduzir(env, frase, "portuguese", "english");
+  const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+    messages: [
+      { role: "system", content: "You draw simple cartoon line drawings as JSON polylines. Output ONLY the JSON, no other text." },
+      {
+        role: "user",
+        content:
+          `Draw: "${ingles}". The canvas is 100x100 (x to the right, y down). ` +
+          `Output {"strokes":[[[x,y],[x,y],...],...]} with 6 to 14 strokes, each stroke with 2 to 40 integer points. ` +
+          `Approximate circles with 16 or more points. Make the drawing large, centered and recognizable.`,
+      },
+    ],
+    max_tokens: 1500,
+  });
+  const m = String(r.response || "").match(/\{[\s\S]*\}/);
+  let dados = null;
+  try { dados = m ? JSON.parse(m[0]) : null; } catch { dados = null; }
+  const lim = (n) => Math.max(0, Math.min(100, Number(n)));
+  const strokes = ((dados && dados.strokes) || [])
+    .slice(0, 30)
+    .map((s) => (Array.isArray(s) ? s : []).slice(0, 60).map((p) => [lim(p && p[0]), lim(p && p[1])]).filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1])))
+    .filter((s) => s.length >= 2);
+  if (!strokes.length) return json({ erro: "IA nao gerou tracos", ingles }, 502);
+  return json({ strokes, ingles });
 }
 
 // POST /api/desc  { image: dataURL }  ->  { texto }  (descricao curta em portugues)
