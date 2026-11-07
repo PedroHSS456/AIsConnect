@@ -34,6 +34,14 @@
   btPalpitar.style.cssText = estiloBotao;
   const linhaBotoes = el("div", {}, btDesenhar, btPalpitar);
   linhaBotoes.style.cssText = "display:flex;gap:6px";
+  const btGravar = el("button", { textContent: "Gravar toque" });
+  const btCopiar = el("button", { textContent: "Copiar log" });
+  btGravar.style.cssText = estiloBotao + ";background:#6b7280";
+  btCopiar.style.cssText = estiloBotao + ";background:#6b7280";
+  const linhaBotoes2 = el("div", {}, btGravar, btCopiar);
+  linhaBotoes2.style.cssText = "display:flex;gap:6px;margin-top:6px";
+  const gravacao = el("textarea", { readOnly: true, rows: 6 });
+  gravacao.style.cssText = "display:none;width:100%;box-sizing:border-box;margin-top:6px;font:10px monospace;border-radius:6px;border:0";
   const chkAuto = el("input", { type: "checkbox" });
   const rotuloAuto = el("label", {}, chkAuto, " Auto (desenha e palpita sozinho)");
   rotuloAuto.style.cssText = "display:block;margin-top:6px;font-size:12px";
@@ -41,7 +49,7 @@
   msg.style.cssText = "margin-top:6px;font-size:12px;opacity:.9;word-break:break-word";
   const topo = el("div", {}, titulo, fechar);
   topo.style.cssText = "display:flex;justify-content:space-between;align-items:center";
-  const corpo = el("div", {}, tema, linhaBotoes, rotuloAuto, msg);
+  const corpo = el("div", {}, tema, linhaBotoes, linhaBotoes2, rotuloAuto, msg, gravacao);
 
   const painel = el("div", { id: "gbot-painel" }, topo, corpo);
   painel.style.cssText =
@@ -208,16 +216,32 @@
   // quantos eventos de cada tipo foram "tratados" pela pagina (ela chamou preventDefault)
   let tratados = { pointer: 0, mouse: 0, touch: 0 };
 
+  // perfil aprendido com "Gravar toque": tipo de ponteiro, id e quais familias de evento o site recebe de verdade
+  let perfil = null;
+  const PADRAO = () => ({
+    pointerType: navigator.maxTouchPoints > 0 ? "touch" : "mouse",
+    pointerId: 1,
+    touchId: 0,
+    familias: { pointer: true, mouse: true, touch: true },
+  });
+
   function disparar(cv, fase, x, y) {
+    const P = perfil || PADRAO();
     const botoes = fase === "up" ? 0 : 1;
     const base = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, screenX: x, screenY: y, view: window };
-    try {
-      if (!cv.dispatchEvent(new PointerEvent("pointer" + fase, { ...base, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: botoes }))) tratados.pointer++;
-    } catch (e) { /* sem PointerEvent */ }
-    if (!cv.dispatchEvent(new MouseEvent("mouse" + fase, { ...base, button: 0, buttons: botoes }))) tratados.mouse++;
-    if (typeof Touch === "function" && typeof TouchEvent === "function") {
+    if (P.familias.pointer) {
       try {
-        const t = new Touch({ identifier: 1, target: cv, clientX: x, clientY: y, screenX: x, screenY: y, pageX: x + scrollX, pageY: y + scrollY });
+        if (!cv.dispatchEvent(new PointerEvent("pointer" + fase, {
+          ...base, pointerId: P.pointerId, pointerType: P.pointerType, isPrimary: true,
+          button: P.pointerType === "mouse" || fase !== "move" ? 0 : -1, buttons: botoes,
+          pressure: fase === "up" ? 0 : 0.5, width: 1, height: 1,
+        }))) tratados.pointer++;
+      } catch (e) { /* sem PointerEvent */ }
+    }
+    if (P.familias.mouse && !cv.dispatchEvent(new MouseEvent("mouse" + fase, { ...base, button: 0, buttons: botoes }))) tratados.mouse++;
+    if (P.familias.touch && typeof Touch === "function" && typeof TouchEvent === "function") {
+      try {
+        const t = new Touch({ identifier: P.touchId, target: cv, clientX: x, clientY: y, screenX: x, screenY: y, pageX: x + scrollX, pageY: y + scrollY });
         const tipo = fase === "down" ? "touchstart" : fase === "move" ? "touchmove" : "touchend";
         if (!cv.dispatchEvent(new TouchEvent(tipo, {
           bubbles: true, cancelable: true, composed: true,
@@ -461,6 +485,63 @@
     ocupado = true;
     try { await fn(); } catch (e) { status("Erro: " + (e && e.message ? e.message : e)); } finally { ocupado = false; }
   }
+  // ---------------------------------------------------------------- gravar um toque de verdade
+  const descreve = (n) => (n && n.tagName ? n.tagName + (n.id ? "#" + n.id : "") + (typeof n.className === "string" && n.className ? "." + n.className.trim().split(/\s+/)[0] : "") : "?");
+
+  async function gravar() {
+    status("GRAVANDO por 8s: faca um tracinho com o dedo no canvas, agora!");
+    const tipos = ["pointerdown", "pointermove", "pointerup", "pointercancel", "mousedown", "mousemove", "mouseup", "touchstart", "touchmove", "touchend", "touchcancel"];
+    const ordem = [], cont = {}, primeiro = {};
+    const h = (e) => {
+      if (dentro(e.target)) return;
+      cont[e.type] = (cont[e.type] || 0) + 1;
+      if (cont[e.type] === 1) ordem.push(e.type);
+      const fam = e.type.startsWith("pointer") ? "pointer" : e.type.startsWith("mouse") ? "mouse" : "touch";
+      if (!primeiro[fam] && /down|start/.test(e.type)) {
+        const ct = e.changedTouches && e.changedTouches[0];
+        primeiro[fam] = {
+          tipo: e.type, confiavel: e.isTrusted, alvo: descreve(e.target), pointerType: e.pointerType,
+          pointerId: e.pointerId, button: e.button, buttons: e.buttons, pressure: e.pressure,
+          touchId: ct ? ct.identifier : undefined,
+        };
+      }
+    };
+    for (const t of tipos) window.addEventListener(t, h, { capture: true, passive: true });
+    await sleep(8000);
+    for (const t of tipos) window.removeEventListener(t, h, { capture: true });
+
+    const linhas = [
+      "ordem: " + (ordem.join(" > ") || "(nenhum evento: toque nao chegou)"),
+      "contagem: " + Object.entries(cont).map(([k, v]) => k + "=" + v).join(" "),
+      ...Object.entries(primeiro).map(([k, v]) => k + ": " + JSON.stringify(v)),
+    ];
+    gravacao.value = linhas.join("\n");
+    gravacao.style.display = "block";
+
+    if (primeiro.pointer || primeiro.touch || primeiro.mouse) {
+      const base = PADRAO();
+      perfil = {
+        pointerType: (primeiro.pointer && primeiro.pointer.pointerType) || (primeiro.touch ? "touch" : "mouse"),
+        pointerId: primeiro.pointer && primeiro.pointer.pointerId != null ? primeiro.pointer.pointerId : base.pointerId,
+        touchId: primeiro.touch && primeiro.touch.touchId != null ? primeiro.touch.touchId : base.touchId,
+        familias: {
+          pointer: !!primeiro.pointer,
+          mouse: (cont.mousemove || 0) > 0,
+          touch: !!primeiro.touch,
+        },
+      };
+      status("Gravado! Agora toque Desenhar: ele imita o seu toque. Se falhar, toque Copiar log e me mande.");
+    } else {
+      status("Nenhum toque chegou na pagina. Toque Copiar log e me mande.");
+    }
+  }
+  btGravar.onclick = () => executar(gravar);
+  btCopiar.onclick = async () => {
+    const texto = "STATUS: " + msg.textContent + "\n" + gravacao.value + "\nPERFIL: " + JSON.stringify(perfil);
+    try { await navigator.clipboard.writeText(texto); status("Log copiado. Cole na conversa."); }
+    catch (e) { gravacao.value = texto; gravacao.style.display = "block"; gravacao.select(); status("Selecione e copie o texto da caixa."); }
+  };
+
   btDesenhar.onclick = () => executar(() => desenhar(false));
   btPalpitar.onclick = () => executar(() => palpitar(false));
 

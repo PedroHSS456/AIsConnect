@@ -9,6 +9,7 @@ O bot roda **dentro da página do Gartic** (por um favorito/bookmarklet), então
 - **Desenhar:** lê o tema na tela e desenha no canvas. Tenta, em ordem: (1) imagem da internet convertida em traços, (2) traços escritos pela IA, (3) rabiscos prontos no próprio script. O painel diz qual usou e avisa se o Gartic ignorar os traços.
 - **Palpitar:** descreve o desenho na tela com IA (Workers AI) e preenche o campo de texto.
 - **Auto:** faz os dois sozinho a cada rodada.
+- **Gravar toque:** grava um toque seu de verdade no canvas (8s) e passa a imitar o mesmo tipo de ponteiro e de eventos. **Copiar log** copia o diagnóstico para mandar a quem for ajustar o bot.
 
 ## Deploy (Cloudflare)
 
