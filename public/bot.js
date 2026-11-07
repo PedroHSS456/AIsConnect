@@ -205,23 +205,47 @@
     }
   }
 
+  // quantos eventos de cada tipo foram "tratados" pela pagina (ela chamou preventDefault)
+  let tratados = { pointer: 0, mouse: 0, touch: 0 };
+
   function disparar(cv, fase, x, y) {
     const botoes = fase === "up" ? 0 : 1;
     const base = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, screenX: x, screenY: y, view: window };
     try {
-      cv.dispatchEvent(new PointerEvent("pointer" + fase, { ...base, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: botoes }));
+      if (!cv.dispatchEvent(new PointerEvent("pointer" + fase, { ...base, pointerId: 1, pointerType: "mouse", isPrimary: true, button: 0, buttons: botoes }))) tratados.pointer++;
     } catch (e) { /* sem PointerEvent */ }
-    cv.dispatchEvent(new MouseEvent("mouse" + fase, { ...base, button: 0, buttons: botoes }));
+    if (!cv.dispatchEvent(new MouseEvent("mouse" + fase, { ...base, button: 0, buttons: botoes }))) tratados.mouse++;
     if (typeof Touch === "function" && typeof TouchEvent === "function") {
       try {
         const t = new Touch({ identifier: 1, target: cv, clientX: x, clientY: y, screenX: x, screenY: y, pageX: x + scrollX, pageY: y + scrollY });
         const tipo = fase === "down" ? "touchstart" : fase === "move" ? "touchmove" : "touchend";
-        cv.dispatchEvent(new TouchEvent(tipo, {
+        if (!cv.dispatchEvent(new TouchEvent(tipo, {
           bubbles: true, cancelable: true, composed: true,
           touches: fase === "up" ? [] : [t], targetTouches: fase === "up" ? [] : [t], changedTouches: [t],
-        }));
+        }))) tratados.touch++;
       } catch (e) { /* sem Touch */ }
     }
+  }
+
+  // o mouse "entra" no canvas antes de apertar (alguns sites so desenham depois de mouseenter/pointerenter)
+  function entrar(alvo, x, y) {
+    const base = { bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, view: window };
+    try { alvo.dispatchEvent(new PointerEvent("pointerover", { ...base, pointerId: 1, pointerType: "mouse", isPrimary: true })); } catch (e) { /* ok */ }
+    try { alvo.dispatchEvent(new PointerEvent("pointerenter", { ...base, bubbles: false, pointerId: 1, pointerType: "mouse", isPrimary: true })); } catch (e) { /* ok */ }
+    alvo.dispatchEvent(new MouseEvent("mouseover", base));
+    alvo.dispatchEvent(new MouseEvent("mouseenter", { ...base, bubbles: false }));
+    alvo.dispatchEvent(new MouseEvent("mousemove", base));
+  }
+
+  // setPointerCapture com ponteiro simulado lanca erro e derruba o tratador do site: vira no-op enquanto desenha
+  function liberarCaptura() {
+    const nomes = ["setPointerCapture", "releasePointerCapture"];
+    const orig = {};
+    for (const nome of nomes) {
+      orig[nome] = Element.prototype[nome];
+      Element.prototype[nome] = function (...a) { try { return orig[nome].apply(this, a); } catch (e) { return undefined; } };
+    }
+    return () => { for (const nome of nomes) Element.prototype[nome] = orig[nome]; };
   }
 
   // alvo real do clique: o elemento no topo naquele ponto (como um toque de verdade)
@@ -231,28 +255,43 @@
   };
 
   // linhas: lista de polilinhas [[x,y], [x,y], ...] em coordenadas da tela
+  // retorna { alvo, erros } para o painel mostrar o que aconteceu
   async function tracar(cv, linhas) {
     painel.style.pointerEvents = "none"; // o painel nao pode tampar o canvas
-    let n = 0;
+    tratados = { pointer: 0, mouse: 0, touch: 0 };
+    const erros = [];
+    const noErro = (e) => erros.push(String((e && e.message) || (e && e.error) || "erro"));
+    window.addEventListener("error", noErro);
+    const restaurar = liberarCaptura();
+    let alvoUsado = null, n = 0;
     try {
       for (const pts of linhas) {
         if (!pts.length) continue;
         let [px, py] = pts[0];
         const alvo = topoEm(px, py, cv);
+        if (!alvoUsado) { alvoUsado = alvo; entrar(alvo, px, py); await sleep(30); }
         disparar(alvo, "down", px, py);
+        let m = 0;
         for (let i = 1; i < pts.length; i++) {
           const [qx, qy] = pts[i];
           const passos = Math.max(1, Math.ceil(Math.hypot(qx - px, qy - py) / 6));
-          for (let s = 1; s <= passos; s++) disparar(alvo, "move", px + ((qx - px) * s) / passos, py + ((qy - py) * s) / passos);
+          for (let s = 1; s <= passos; s++) {
+            disparar(alvo, "move", px + ((qx - px) * s) / passos, py + ((qy - py) * s) / passos);
+            if (++m % 2 === 0) await sleep(0); // da tempo do site processar
+          }
           px = qx; py = qy;
         }
         if (pts.length === 1) disparar(alvo, "move", px, py);
         disparar(alvo, "up", px, py);
-        if (++n % 6 === 0) await sleep(0);
+        if (++n % 3 === 0) await sleep(4);
       }
     } finally {
+      restaurar();
+      window.removeEventListener("error", noErro);
       painel.style.pointerEvents = "";
     }
+    const nome = alvoUsado ? alvoUsado.tagName + (alvoUsado.id ? "#" + alvoUsado.id : "") + (typeof alvoUsado.className === "string" && alvoUsado.className ? "." + alvoUsado.className.split(" ")[0] : "") : "?";
+    return { alvo: nome, erros };
   }
 
   const paraLinhas = (segs) => segs.map(([a, b, c, d]) => [[a, b], [c, d]]);
@@ -362,14 +401,21 @@
 
     status(`Desenhando (${fonte})...`);
     const antes = assinatura();
-    await tracar(cv, linhas);
+    const info = await tracar(cv, linhas);
     await sleep(500);
     const depois = assinatura();
+    const diag =
+      ` [alvo ${info.alvo}; tratados p${tratados.pointer}/m${tratados.mouse}/t${tratados.touch}` +
+      (info.erros.length ? `; ERRO DA PAGINA: ${info.erros[0].slice(0, 90)}` : "") + "]";
     if (antes !== null && antes === depois) {
-      status(`Tracei (${fonte}) mas o canvas nao mudou: o Gartic parece ignorar cliques simulados.`);
+      status(`Tracei (${fonte}) mas o canvas NAO mudou.` + diag);
       return;
     }
-    status(`Desenhou (${fonte}): ${frase}`);
+    if (antes === null) {
+      status(`Tracei (${fonte}). Nao consigo verificar se apareceu: confira na tela.` + diag);
+    } else {
+      status(`Desenhou (${fonte}): ${frase}` + diag);
+    }
     if (enviar) { await sleep(400); botao(PRONTO); }
   }
 
