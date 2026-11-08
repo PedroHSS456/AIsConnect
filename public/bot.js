@@ -14,6 +14,7 @@
   let auto = false;
   let ocupado = false;
   let ultima = "";
+  let overlay = null, seguirTimer = null, alvoDecalque = null; // decalque por cima do canvas
 
   // ---------------------------------------------------------------- painel
   const el = (tag, props, ...filhos) => {
@@ -43,14 +44,22 @@
   linhaBotoes2.style.cssText = "display:flex;gap:6px;margin-top:6px";
   const gravacao = el("textarea", { readOnly: true, rows: 6 });
   gravacao.style.cssText = "display:none;width:100%;box-sizing:border-box;margin-top:6px;font:10px monospace;border-radius:6px;border:0";
+  const btDecalque = el("button", { textContent: "Decalque" });
+  const btLimpar = el("button", { textContent: "Limpar" });
+  btDecalque.style.cssText = estiloBotao;
+  btLimpar.style.cssText = estiloBotao + ";background:#6b7280";
+  const linhaDecalque = el("div", {}, btDecalque, btLimpar);
+  linhaDecalque.style.cssText = "display:flex;gap:6px";
+  const linhaPalpite = el("div", {}, btPalpitar);
+  linhaPalpite.style.cssText = "display:flex;margin-top:6px";
   const chkAuto = el("input", { type: "checkbox" });
-  const rotuloAuto = el("label", {}, chkAuto, " Auto (desenha e palpita sozinho)");
+  const rotuloAuto = el("label", {}, chkAuto, " Auto (decalque e palpite sozinhos)");
   rotuloAuto.style.cssText = "display:block;margin-top:6px;font-size:12px";
   const msg = el("div", { textContent: "Pronto." });
   msg.style.cssText = "margin-top:6px;font-size:12px;opacity:.9;word-break:break-word";
   const topo = el("div", {}, titulo, fechar);
   topo.style.cssText = "display:flex;justify-content:space-between;align-items:center";
-  const corpo = el("div", {}, tema, linhaBotoes, linhaBotoes2, rotuloAuto, msg, gravacao);
+  const corpo = el("div", {}, tema, linhaDecalque, linhaPalpite, rotuloAuto, msg);
 
   const painel = el("div", { id: "gbot-painel" }, topo, corpo);
   painel.style.cssText =
@@ -75,7 +84,7 @@
   };
 
   // ---------------------------------------------------------------- achar coisas na pagina
-  const dentro = (n) => painel.contains(n);
+  const dentro = (n) => painel.contains(n) || n === overlay;
   function visivel(n) {
     const r = n.getBoundingClientRect();
     const cs = getComputedStyle(n);
@@ -552,6 +561,112 @@
     catch (e) { gravacao.value = texto; gravacao.style.display = "block"; gravacao.select(); status("Selecione e copie o texto da caixa."); }
   };
 
+  // ---------------------------------------------------------------- decalque (voce passa o dedo por cima)
+  function limparDecalque() {
+    if (overlay) overlay.remove();
+    overlay = null; alvoDecalque = null;
+    if (seguirTimer) clearInterval(seguirTimer);
+    seguirTimer = null;
+  }
+  function posicionar() {
+    if (!overlay || !alvoDecalque || !document.contains(alvoDecalque)) return;
+    const r = alvoDecalque.getBoundingClientRect();
+    Object.assign(overlay.style, { left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
+  }
+  function criarOverlay(cv) {
+    limparDecalque();
+    alvoDecalque = cv;
+    const r = cv.getBoundingClientRect();
+    overlay = document.createElement("canvas");
+    overlay.width = Math.max(1, Math.round(r.width));
+    overlay.height = Math.max(1, Math.round(r.height));
+    overlay.style.cssText = "position:fixed;pointer-events:none;z-index:2147483646;touch-action:none";
+    document.body.append(overlay);
+    posicionar();
+    seguirTimer = setInterval(posicionar, 400);
+    return overlay;
+  }
+
+  // cores translucidas + contorno escuro (Sobel) por cima
+  function pintarImagem(ov, im) {
+    const ctx = ov.getContext("2d");
+    const W = ov.width, H = ov.height;
+    ctx.clearRect(0, 0, W, H);
+    const iw = im.naturalWidth || im.width, ih = im.naturalHeight || im.height;
+    const esc = Math.min(W / iw, H / ih) * 0.95;
+    const w = Math.max(2, Math.round(iw * esc)), h = Math.max(2, Math.round(ih * esc));
+    const dx = Math.round((W - w) / 2), dy = Math.round((H - h) / 2);
+    ctx.globalAlpha = 0.4;
+    ctx.drawImage(im, dx, dy, w, h);
+    ctx.globalAlpha = 1;
+
+    const t = document.createElement("canvas");
+    t.width = w; t.height = h;
+    const tc = t.getContext("2d");
+    tc.fillStyle = "#fff"; tc.fillRect(0, 0, w, h); tc.drawImage(im, 0, 0, w, h);
+    const px = tc.getImageData(0, 0, w, h).data;
+    const g = new Float32Array(w * h);
+    for (let i = 0; i < w * h; i++) g[i] = px[i * 4] * 0.3 + px[i * 4 + 1] * 0.59 + px[i * 4 + 2] * 0.11;
+    const mag = new Float32Array(w * h);
+    let max = 1;
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const i = y * w + x;
+      const gx = -g[i - w - 1] - 2 * g[i - 1] - g[i + w - 1] + g[i - w + 1] + 2 * g[i + 1] + g[i + w + 1];
+      const gy = -g[i - w - 1] - 2 * g[i - w] - g[i - w + 1] + g[i + w - 1] + 2 * g[i + w] + g[i + w + 1];
+      mag[i] = Math.hypot(gx, gy);
+      if (mag[i] > max) max = mag[i];
+    }
+    const hist = new Uint32Array(256);
+    for (let i = 0; i < w * h; i++) hist[Math.min(255, (mag[i] / max) * 255) | 0]++;
+    let acum = 0, corte = 255;
+    for (let b = 255; b >= 0; b--) { acum += hist[b]; if (acum >= w * h * 0.07) { corte = b; break; } }
+    const lim = Math.max(60, (corte / 255) * max);
+    const saida = new ImageData(w, h);
+    for (let i = 0; i < w * h; i++) if (mag[i] >= lim) { saida.data[i * 4] = 20; saida.data[i * 4 + 1] = 20; saida.data[i * 4 + 2] = 70; saida.data[i * 4 + 3] = 235; }
+    const t2 = document.createElement("canvas");
+    t2.width = w; t2.height = h;
+    t2.getContext("2d").putImageData(saida, 0, 0);
+    ctx.drawImage(t2, dx, dy);
+    ctx.drawImage(t2, dx + 1, dy); // engrossa um pouco o contorno
+  }
+
+  function pintarLinhas(ov, linhas, box) {
+    const ctx = ov.getContext("2d");
+    ctx.clearRect(0, 0, ov.width, ov.height);
+    ctx.strokeStyle = "rgba(220,30,30,0.85)";
+    ctx.lineWidth = 3; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    for (const pts of linhas) {
+      if (!pts.length) continue;
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0] - box.left, pts[0][1] - box.top);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0] - box.left, pts[i][1] - box.top);
+      ctx.stroke();
+    }
+  }
+
+  async function decalque() {
+    const cv = maior("canvas", 200, 120);
+    if (!cv) throw new Error("nao achei o canvas de desenho");
+    const frase = lerFrase();
+    if (!frase) throw new Error("digite o tema no campo Tema");
+    status(`Buscando imagem: ${frase}`);
+    const ov = criarOverlay(cv);
+    try {
+      const im = await buscarImagem(frase);
+      pintarImagem(ov, im);
+      status(`Decalque pronto: ${frase}. Passe o dedo por cima. Toque Decalque de novo para outra imagem.`);
+    } catch (e1) {
+      const box = cv.getBoundingClientRect();
+      let linhas, fonte;
+      try { linhas = await rabiscoIA(frase, box); fonte = "IA"; }
+      catch (e2) { linhas = rabiscoLocal(frase, box); fonte = "rabisco pronto"; }
+      pintarLinhas(ov, linhas, box);
+      status(`Decalque (${fonte}): ${frase}. Passe o dedo por cima.`);
+    }
+  }
+  btDecalque.onclick = () => executar(decalque);
+  btLimpar.onclick = () => { limparDecalque(); status("Decalque removido."); };
+
   btDesenhar.onclick = () => executar(() => desenhar(false));
   btPalpitar.onclick = () => executar(() => palpitar(false));
 
@@ -579,11 +694,12 @@
     if (!auto || ocupado) return;
     const c = campo();
     if (!c) campoEscrito = null;
+    else if (overlay) limparDecalque(); // saiu da tela de desenhar
     const temDesenho = !!(maior("canvas", 200, 120) || maior("img", 200, 120));
     if (!c && maior("canvas", 200, 120)) {
       const frase = lerFrase();
       const ass = "d|" + frase;
-      if (frase && ass !== ultima) { ultima = ass; await executar(() => desenhar(true)); }
+      if (frase && ass !== ultima) { ultima = ass; await executar(() => (MODO_NUVEM ? desenhar(true) : decalque())); }
     } else if (c && temDesenho) {
       let foto = null;
       try { foto = fotoDesenho(); } catch (e) { /* canvas bloqueado */ }

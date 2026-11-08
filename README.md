@@ -6,7 +6,8 @@ Ajudante para Gartic Phone. Você joga no seu próprio navegador e o bot faz o t
 
 O bot roda **dentro da página do Gartic** (por um favorito/bookmarklet), então não precisa de PC nem de navegador na nuvem.
 
-- **Desenhar:** lê o tema na tela e desenha no canvas. Tenta, em ordem: (1) imagem da internet convertida em traços, (2) traços escritos pela IA, (3) rabiscos prontos no próprio script. O painel diz qual usou e avisa se o Gartic ignorar os traços.
+- **Decalque:** você digita o tema e toca em Decalque: o contorno e as cores da imagem (ou um rabisco) aparecem transparentes por cima do canvas, sem bloquear o toque, e você passa o dedo por cima.
+- **Desenhar (antigo):** lê o tema na tela e desenha no canvas. Tenta, em ordem: (1) imagem da internet convertida em traços, (2) traços escritos pela IA, (3) rabiscos prontos no próprio script. O painel diz qual usou e avisa se o Gartic ignorar os traços.
 - **Palpitar:** descreve o desenho na tela com IA (Workers AI) e preenche o campo de texto.
 - **Auto:** faz os dois sozinho a cada rodada.
 - **Gravar toque:** grava um toque seu de verdade no canvas (8s) e passa a imitar o mesmo tipo de ponteiro e de eventos. **Copiar log** copia o diagnóstico para mandar a quem for ajustar o bot.
@@ -51,3 +52,6 @@ O Gartic não aceita toque simulado dentro da página, então este modo roda um 
 3. A página mostra o log e atualiza sozinha. `/tela` mostra uma foto do que o bot está vendo e `/parar` encerra.
 
 Limites: o plano grátis do Render dorme sem acesso (deixe a página do log aberta) e tem pouca memória. A imagem e os palpites por IA usam o Worker da Cloudflare; se o limite diário dela acabar, ele usa rabiscos prontos e palpites genéricos.
+
+
+> **Nota:** o Gartic bloqueia acessos vindos de servidores ("you have been blocked"), então o modo Render não consegue entrar na sala. O uso real é o favorito no seu celular (decalque + palpite).
