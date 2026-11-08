@@ -136,7 +136,45 @@
   }
 
   // ---------------------------------------------------------------- desenhar
+  const PARADAS = new Set(["de", "da", "do", "das", "dos", "um", "uma", "uns", "umas", "o", "a", "os", "as", "com", "em", "no", "na", "nos", "nas", "para", "por", "e", "ou", "que", "ao", "aos", "se", "seu", "sua", "dele", "dela", "muito", "mais"]);
+  function palavrasChave(frase) {
+    const ws = frase.toLowerCase().replace(/[^\p{L}\s]/gu, " ").split(/\s+/)
+      .filter((w) => w.length >= 3 && !PARADAS.has(w) && !/(ando|endo|indo)$/.test(w)); // tira artigos e gerundios
+    return [...new Set(ws)];
+  }
+
+  // busca direto na Wikipedia pelo navegador do celular (nao depende do Worker nem da IA)
+  async function imagemDireta(frase) {
+    const ws = palavrasChave(frase);
+    const consultas = [...new Set([ws.slice(0, 2).join(" "), ...ws.slice(0, 4)])].filter(Boolean);
+    for (const q of consultas) {
+      try {
+        const url = "https://pt.wikipedia.org/w/api.php?" + new URLSearchParams({
+          action: "query", format: "json", origin: "*", generator: "search", gsrsearch: q, gsrlimit: "10",
+          prop: "pageimages", piprop: "thumbnail", pithumbsize: "600",
+        });
+        const d = await (await buscar(url, 10000)).json();
+        const fotos = Object.values((d.query && d.query.pages) || {})
+          .sort((a, b) => (a.index || 0) - (b.index || 0))
+          .map((p) => p.thumbnail && p.thumbnail.source)
+          .filter(Boolean);
+        if (!fotos.length) continue;
+        const escolhida = fotos[Math.floor(Math.random() * Math.min(3, fotos.length))];
+        const resp = await buscar(escolhida, 15000);
+        if (!resp.ok) continue;
+        return await createImageBitmap(await resp.blob());
+      } catch (e) { /* tenta a proxima consulta */ }
+    }
+    throw new Error("Wikipedia sem imagem para: " + (consultas.join(", ") || frase));
+  }
+
   async function buscarImagem(frase) {
+    let motivo = "";
+    try { return await imagemDireta(frase); } catch (e) { motivo = e.message; }
+    try { return await imagemViaWorker(frase); } catch (e) { throw new Error(motivo + " | Worker: " + e.message); }
+  }
+
+  async function imagemViaWorker(frase) {
     const r = await buscar(`${BASE}/api/img?q=${encodeURIComponent(frase)}`, 15000);
     const d = await r.json();
     if (!d.url) throw new Error(d.erro || "nenhuma imagem achada");
@@ -661,7 +699,7 @@
       try { linhas = await rabiscoIA(frase, box); fonte = "IA"; }
       catch (e2) { linhas = rabiscoLocal(frase, box); fonte = "rabisco pronto"; }
       pintarLinhas(ov, linhas, box);
-      status(`Decalque (${fonte}): ${frase}. Passe o dedo por cima.`);
+      status(`Decalque (${fonte}): ${frase}. Sem imagem: ${String(e1.message).slice(0, 140)}`);
     }
   }
   btDecalque.onclick = () => executar(decalque);
